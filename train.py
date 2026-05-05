@@ -45,7 +45,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     criterion = torch.nn.BCELoss()
 
-    num_epochs = 29
+    num_epochs = 35
 
     for epoch in range(start_epoch, start_epoch + num_epochs):
         start_time = time.time()
