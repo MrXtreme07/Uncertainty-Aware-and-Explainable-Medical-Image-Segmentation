@@ -39,3 +39,10 @@ Thumbs.db
 # Misc
 *.log
 *.tmp
+
+models/training_input/
+data/
+outputs/
+*.pth
+__pycache__/
+.venv/

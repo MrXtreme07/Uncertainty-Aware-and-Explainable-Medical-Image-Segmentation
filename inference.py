@@ -6,11 +6,17 @@ from models.unet import UNet
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Loaded Dataset for Validation
-dataset = ISICDataset("data/val_input", "data/val_masks")
+dataset = ISICDataset(r"D:\data\val_input", r"D:\data\val_masks")
 
 # Load model
 model = UNet().to(device)
-model.load_state_dict(torch.load("outputs/model_epoch_35.pth"))
+#model.load_state_dict(torch.load("outputs/model_epoch_35.pth")) changed this line bcz i dont have cuda
+model.load_state_dict(
+    torch.load(
+        "outputs/model_epoch_35.pth",
+        map_location=torch.device('cpu')
+    )
+)
 model.eval()
 
 # Get one sample

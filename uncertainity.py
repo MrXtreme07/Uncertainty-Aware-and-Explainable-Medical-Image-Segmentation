@@ -6,11 +6,16 @@ from models.unet import UNet
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-dataset = ISICDataset("data/val_input", "data/val_maskss")
+dataset = ISICDataset(r"D:\data\val_input", r"D:\data\val_masks")
 
 model = UNet().to(device)
-model.load_state_dict(torch.load("outputs/model_epoch_35.pth"))
-
+#model.load_state_dict(torch.load("outputs/model_epoch_35.pth")) changed this line bcz i dont have cuda
+model.load_state_dict(
+    torch.load(
+        "outputs/model_epoch_35.pth",
+        map_location=torch.device('cpu')
+    )
+)
 # Enable dropout during inference
 model.train()
 
