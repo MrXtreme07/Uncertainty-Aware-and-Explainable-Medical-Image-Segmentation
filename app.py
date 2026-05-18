@@ -1,68 +1,51 @@
 import streamlit as st
-import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
 from PIL import Image
 import torchvision.transforms as transforms
 
-from pytorch_grad_cam import GradCAM
-from pytorch_grad_cam.utils.image import show_cam_on_image
-
-from models.unet import UNet
+from inference import segment_uploaded_image
+from uncertainity import compute_uncertainty
+from gradcam import generate_gradcam
+from explainability import generate_explanation
 
 # =====================================================
 # PAGE CONFIG
 # =====================================================
+
 st.set_page_config(
     page_title="Medical AI Dashboard",
     layout="wide"
 )
 
-st.title("🧠 Uncertainty-Aware Medical Image Segmentation")
-
 # =====================================================
-# DEVICE
+# TITLE
 # =====================================================
-device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# =====================================================
-# LOAD MODEL
-# =====================================================
-@st.cache_resource
-def load_model():
+st.title("Uncertainty-Aware Medical Image Segmentation")
 
-    model = UNet().to(device)
-
-    model.load_state_dict(
-        torch.load(
-            "outputs/model_epoch_35.pth",
-            map_location=torch.device('cpu')
-        )
-    )
-
-    return model
-
-model = load_model()
+st.markdown("""
+This dashboard performs:
+- Medical Image Segmentation
+- MC Dropout Uncertainty Estimation
+- GradCAM Explainability
+- Rule-Based Explainability
+""")
 
 # =====================================================
 # TRANSFORM
 # =====================================================
+
 transform = transforms.Compose([
-    transforms.Resize((256, 256)),
+    transforms.Resize((256,256)),
     transforms.ToTensor()
 ])
 
 # =====================================================
-# SEGMENTATION TARGET FOR GRADCAM
-# =====================================================
-class SegmentationTarget:
-    def __call__(self, model_output):
-        return model_output.mean()
-
-# =====================================================
 # SIDEBAR
 # =====================================================
+
 st.sidebar.title("⚙️ Controls")
 
 threshold = st.sidebar.slider(
@@ -84,6 +67,7 @@ T = st.sidebar.slider(
 # =====================================================
 # FILE UPLOAD
 # =====================================================
+
 uploaded_file = st.file_uploader(
     "Upload Dermoscopy Image",
     type=["jpg", "jpeg", "png"]
@@ -92,83 +76,24 @@ uploaded_file = st.file_uploader(
 # =====================================================
 # MAIN PIPELINE
 # =====================================================
+
 if uploaded_file:
 
     # =================================================
-    # IMAGE LOADING
+    # LOAD IMAGE
     # =================================================
+
     image = Image.open(uploaded_file).convert("RGB")
 
     input_image = transform(image)
 
-    input_tensor = input_image.unsqueeze(0).to(device)
+    input_tensor = input_image.unsqueeze(0)
 
     # =================================================
-    # SEGMENTATION
+    # RGB IMAGE
     # =================================================
-    model.eval()
 
-    with torch.no_grad():
-
-        pred = model(input_tensor)
-
-    pred = pred.squeeze().cpu().numpy()
-
-    pred_bin = (pred > threshold).astype(np.uint8)
-
-    # =================================================
-    # MC DROPOUT UNCERTAINTY
-    # =================================================
-    model.train()
-
-    preds = []
-
-    with torch.no_grad():
-
-        for _ in range(T):
-
-            p = model(input_tensor)
-
-            preds.append(p.cpu().numpy())
-
-    preds = np.array(preds).squeeze()
-
-    mean_pred = preds.mean(axis=0)
-
-    variance = preds.var(axis=0)
-
-    # =================================================
-    # RELIABILITY SCORE
-    # =================================================
-    reliability = 1 - variance.mean()
-
-    reliability_percent = reliability * 100
-
-    # =================================================
-    # GRADCAM
-    # =================================================
-    model.eval()
-
-    target_layers = [model.bottleneck]
-
-    cam = GradCAM(
-        model=model,
-        target_layers=target_layers
-    )
-
-    targets = [SegmentationTarget()]
-
-    grayscale_cam = cam(
-        input_tensor=input_tensor,
-        targets=targets
-    )
-
-    grayscale_cam = grayscale_cam[0]
-
-    # =================================================
-    # IMAGE PREP
-    # =================================================
-    rgb_img = input_image.permute(1, 2, 0).cpu().numpy()
+    rgb_img = input_image.permute(1,2,0).numpy()
 
     rgb_img = (
         rgb_img - rgb_img.min()
@@ -177,41 +102,76 @@ if uploaded_file:
     )
 
     # =================================================
-    # GRADCAM OVERLAY
+    # SEGMENTATION
     # =================================================
-    gradcam_overlay = show_cam_on_image(
-        rgb_img,
-        grayscale_cam,
-        use_rgb=True
+
+    pred, pred_bin = segment_uploaded_image(
+        input_tensor,
+        threshold
+    )
+
+    # =================================================
+    # UNCERTAINTY
+    # =================================================
+
+    mean_pred, variance, reliability_percent = (
+        compute_uncertainty(
+            input_tensor,
+            T
+        )
+    )
+
+    # =================================================
+    # GRADCAM
+    # =================================================
+
+    grayscale_cam, gradcam_overlay = (
+        generate_gradcam(
+            input_tensor,
+            rgb_img
+        )
+    )
+
+    # =================================================
+    # RULE-BASED EXPLAINABILITY
+    # =================================================
+
+    explanation = generate_explanation(
+        variance,
+        reliability_percent
     )
 
     # =================================================
     # UNCERTAINTY OVERLAY
     # =================================================
-    fig_uncertainty, ax = plt.subplots(figsize=(5, 5))
 
-    ax.imshow(rgb_img)
+    fig_overlay, ax_overlay = plt.subplots(figsize=(5,5))
 
-    ax.imshow(
+    ax_overlay.imshow(rgb_img)
+
+    ax_overlay.imshow(
         variance,
         cmap='inferno',
         alpha=0.5
     )
 
-    ax.set_title("Uncertainty Overlay")
+    ax_overlay.set_title("Uncertainty Overlay")
 
-    ax.axis("off")
+    ax_overlay.axis("off")
 
     # =================================================
-    # DASHBOARD
+    # DASHBOARD TITLE
     # =================================================
-    st.subheader("📊 Clinical AI Dashboard")
+
+    st.subheader(" Clinical Dashboard")
 
     # =================================================
     # FIRST ROW
     # =================================================
+
     col1, col2, col3 = st.columns(3)
 
+    # ORIGINAL IMAGE
     with col1:
 
         st.image(
@@ -220,18 +180,23 @@ if uploaded_file:
             use_container_width=True
         )
 
+    # PREDICTED MASK
     with col2:
 
-        st.image(
-            pred_bin,
-            caption="Predicted Mask",
-            use_container_width=True,
-            clamp=True
-        )
+        fig_mask, ax_mask = plt.subplots(figsize=(5,5))
 
+        ax_mask.imshow(pred_bin, cmap='gray')
+
+        ax_mask.set_title("Predicted Mask")
+
+        ax_mask.axis("off")
+
+        st.pyplot(fig_mask)
+
+    # RAW PREDICTION
     with col3:
 
-        fig_pred, ax_pred = plt.subplots(figsize=(5, 5))
+        fig_pred, ax_pred = plt.subplots(figsize=(5,5))
 
         ax_pred.imshow(mean_pred, cmap='gray')
 
@@ -244,11 +209,13 @@ if uploaded_file:
     # =================================================
     # SECOND ROW
     # =================================================
+
     col4, col5, col6 = st.columns(3)
 
+    # UNCERTAINTY MAP
     with col4:
 
-        fig_var, ax_var = plt.subplots(figsize=(5, 5))
+        fig_var, ax_var = plt.subplots(figsize=(5,5))
 
         ax_var.imshow(variance, cmap='inferno')
 
@@ -258,17 +225,19 @@ if uploaded_file:
 
         st.pyplot(fig_var)
 
+    # UNCERTAINTY OVERLAY
     with col5:
 
-        st.pyplot(fig_uncertainty)
+        st.pyplot(fig_overlay)
 
+    # GRADCAM HEATMAP
     with col6:
 
-        fig_cam, ax_cam = plt.subplots(figsize=(5, 5))
+        fig_cam, ax_cam = plt.subplots(figsize=(5,5))
 
         ax_cam.imshow(grayscale_cam, cmap='jet')
 
-        ax_cam.set_title("Grad-CAM Heatmap")
+        ax_cam.set_title("GradCAM Heatmap")
 
         ax_cam.axis("off")
 
@@ -277,16 +246,19 @@ if uploaded_file:
     # =================================================
     # THIRD ROW
     # =================================================
+
     col7, col8 = st.columns(2)
 
+    # GRADCAM OVERLAY
     with col7:
 
         st.image(
             gradcam_overlay,
-            caption="Grad-CAM Overlay",
+            caption="GradCAM Overlay",
             use_container_width=True
         )
 
+    # METRICS
     with col8:
 
         st.subheader("📈 Metrics")
@@ -306,11 +278,50 @@ if uploaded_file:
             f"{variance.max():.6f}"
         )
 
-        if reliability_percent > 85:
-            st.success("HIGH CONFIDENCE PREDICTION")
+        # =============================================
+        # DETAILED RELIABILITY STATUS
+        # =============================================
 
-        elif reliability_percent > 70:
-            st.warning("MODERATE CONFIDENCE")
+        if reliability_percent < 70:
+
+            st.error(
+                "VERY LOW RELIABILITY"
+            )
+
+        elif reliability_percent < 80:
+
+            st.warning(
+                "LOW RELIABILITY"
+            )
+
+        elif reliability_percent < 85:
+
+            st.warning(
+                "MODERATE RELIABILITY"
+            )
+
+        elif reliability_percent < 90:
+
+            st.info(
+                "GOOD RELIABILITY"
+            )
+
+        elif reliability_percent < 95:
+
+            st.success(
+                "VERY HIGH RELIABILITY"
+            )
 
         else:
-            st.error("LOW CONFIDENCE PREDICTION")
+
+            st.success(
+                "EXCELLENT RELIABILITY"
+            )
+
+    # =================================================
+    # RULE-BASED EXPLAINABILITY PANEL
+    # =================================================
+
+    st.subheader(" Explainability")
+
+    st.info(explanation)
